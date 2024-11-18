@@ -5,11 +5,14 @@ from datasets import load_dataset
 class OpenWebTextLoader:
     def __init__(self):
         self.dataset = None
-        self.cache_dir = "./build-1/datasets/openwebtext/data"
+        self.cache_dir = None
+        self.is_loaded = False  # Track if the dataset is loaded
 
-    def load(self):
+    def load(self, path):
         print("Loading OpenWebText dataset")
+        self.cache_dir = path
         self.dataset = load_dataset("openwebtext", cache_dir=self.cache_dir, trust_remote_code=True)
+        self.is_loaded = True
         print("Loading Complete")
         print("Dataset Structure:")
         print(self.dataset)  # Check dataset structure
@@ -18,9 +21,12 @@ class OpenWebTextLoader:
         print("Loading OpenWebText dataset complete")
 
     def verify_files(self):
+        if not self.is_loaded:
+            raise RuntimeError("Dataset has not been loaded. Please call the `load` method first.")
+        
         print("Verifying dataset files...")
         dataset_cache_files = os.path.join(self.cache_dir, "downloads")
-        
+
         # Check if the cache directory exists
         if not os.path.exists(dataset_cache_files):
             print("Cache directory not found. Verification failed.")

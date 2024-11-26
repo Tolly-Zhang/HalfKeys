@@ -87,6 +87,7 @@ class DatasetManager:
         """
         Verifies the current files against the reference hash stored during the initial load.
         If `auto_reload=True`, automatically reloads the dataset upon verification failure.
+        Updates the 'date_last_verified' in the metadata if verification is successful.
         """
         metadata = DatasetManager._load_metadata()
         entry = next((e for e in metadata if e["name"] == dataset_name), None)

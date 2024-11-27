@@ -3,7 +3,7 @@ import hashlib
 import json
 import shutil
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from tqdm import tqdm
 import datasets
 
@@ -83,41 +83,75 @@ class DatasetManager:
         logging.info("Dataset reloaded and metadata updated.")
 
     @staticmethod
-    def verify_files(dataset_name, auto_reload=False):
+    def fetch_status(dataset_name=None):
         """
-        Verifies the current files against the reference hash stored during the initial load.
-        If `auto_reload=True`, automatically reloads the dataset upon verification failure.
-        Updates the 'date_last_verified' in the metadata if verification is successful.
+        Fetches and prints the status report of the specified dataset.
+        If no dataset_name is provided, fetches the status of all datasets.
         """
-        metadata = DatasetManager._load_metadata()
-        entry = next((e for e in metadata if e["name"] == dataset_name), None)
-
-        if not entry:
-            raise RuntimeError(f"No metadata found for dataset '{dataset_name}'. Please load it first.")
-
-        dataset_dir = entry["path"]
-        reference_hash = entry["reference_hash"]
-
-        if not os.path.exists(dataset_dir):
-            logging.error(f"Dataset directory '{dataset_dir}' does not exist. Verification failed.")
-            return False
-
-        logging.info("Verifying dataset files...")
-        current_hash = DatasetManager._calculate_directory_hash(dataset_dir)
-        logging.info(f"Reference hash: {reference_hash}")
-        logging.info(f"Current hash: {current_hash}")
-
-        if current_hash != reference_hash:
-            logging.warning("Hash mismatch! The dataset files have been altered.")
-            if auto_reload:
-                DatasetManager.reload(dataset_name, dataset_dir, overwrite=True)
+        try:
+            metadata = DatasetManager._load_metadata()
+            if dataset_name:
+                # Fetch status for the specified dataset
+                entry = next((e for e in metadata if e["name"] == dataset_name), None)
+                if entry:
+                    logging.info(f"Dataset '{dataset_name}' status:")
+                    logging.info(f"  Path: {entry['path']}")
+                    logging.info(f"  Date Loaded: {entry['date_loaded']}")
+                    logging.info(f"  Date Last Verified: {entry.get('date_last_verified', 'Never')}")
+                else:
+                    logging.info(f"No metadata found for dataset '{dataset_name}'.")
             else:
+                # Fetch status for all datasets
+                if metadata:
+                    logging.info("Status of all loaded datasets:")
+                    for entry in metadata:
+                        logging.info(f"- Dataset '{entry['name']}':")
+                        logging.info(f"    Path: {entry['path']}")
+                        logging.info(f"    Date Loaded: {entry['date_loaded']}")
+                        logging.info(f"    Date Last Verified: {entry.get('date_last_verified', 'Never')}")
+                else:
+                    logging.info("No datasets have been loaded.")
+        except Exception as e:
+            logging.error(f"An error occurred while fetching status: {e}")
+
+    @staticmethod
+    def verify_files(dataset_name):
+        """
+        Verifies the dataset files and updates the verification timestamp.
+        """
+        try:
+            metadata = DatasetManager._load_metadata()
+            entry = next((e for e in metadata if e["name"] == dataset_name), None)
+
+            if not entry:
+                raise RuntimeError(f"No metadata found for dataset '{dataset_name}'. Please load it first.")
+
+            dataset_dir = entry["path"]
+            reference_hash = entry["reference_hash"]
+
+            if not os.path.exists(dataset_dir):
+                logging.error(f"Dataset directory '{dataset_dir}' does not exist. Verification failed.")
+                return False
+
+            # Log the initiation of dataset verification
+            logging.info("Dataset verification initiated.")
+
+            # Always verify the dataset files
+            current_hash = DatasetManager._calculate_directory_hash(dataset_dir)
+            logging.info(f"Reference hash: {reference_hash}")
+            logging.info(f"Current hash: {current_hash}")
+
+            if current_hash != reference_hash:
+                logging.warning("Hash mismatch! The dataset files have been altered.")
                 raise RuntimeError("Dataset verification failed. Please reload the dataset to proceed.")
-        else:
-            logging.info("Dataset verification successful.")
-            entry["date_last_verified"] = datetime.now().isoformat()
-            DatasetManager._save_metadata(metadata)
-        return True
+            else:
+                logging.info("Dataset verification successful.")
+                entry["date_last_verified"] = datetime.now().isoformat()
+                DatasetManager._save_metadata(metadata)
+            return True
+        except Exception as e:
+            logging.error(f"An error occurred during verification: {e}")
+            return False
 
     @staticmethod
     def delete_dataset(dataset_name):
@@ -144,14 +178,27 @@ class DatasetManager:
     def _calculate_directory_hash(directory, hash_type="sha256"):
         """
         Computes a hash for the entire directory by hashing all files within it.
+        Displays a progress bar during the process.
         """
         hash_func = hashlib.new(hash_type)
+        file_list = []
+
+        # Collect all file paths
         for root, _, files in os.walk(directory):
-            for file in sorted(files):  # Sort to ensure consistent order
+            for file in files:
                 filepath = os.path.join(root, file)
-                with open(filepath, "rb") as f:
-                    while chunk := f.read(8192):
-                        hash_func.update(chunk)
+                file_list.append(filepath)
+
+        # Sort files to ensure consistent order
+        file_list.sort()
+
+        # Log the start of hash calculation
+        logging.info("Calculating directory hash:")
+        for filepath in tqdm(file_list, desc="Verifying files", unit="file"):
+            with open(filepath, "rb") as f:
+                while chunk := f.read(8192):
+                    hash_func.update(chunk)
+
         return hash_func.hexdigest()
 
     @staticmethod

@@ -1,0 +1,11 @@
+from datasets import load_dataset
+
+import nltk
+from nltk.tokenize import word_tokenize
+nltk.download('punkt')  # Download tokenizer model
+
+dataset = load_dataset("openwebtext")
+
+text = dataset["train"][0]["text"]
+tokens = word_tokenize(text)
+print("tokens")

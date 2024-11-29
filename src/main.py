@@ -16,8 +16,12 @@ def main():
     # Fetch and print status of all datasets
     datasets_loader.DatasetManager.fetch_status()
 
-    # Verify the dataset files for a specific dataset
+    # Load the dataset before verification
     dataset_name = "openwebtext"
+    dataset_dir = r'F:\Projects\HalfKeys\data\raw\openwebtext'
+    datasets_loader.DatasetManager.initial_load(dataset_name, dataset_dir)
+
+    # Verify the dataset files for a specific dataset
     datasets_loader.DatasetManager.verify_files(dataset_name)
 
     # Create an instance of TestTokenizer and run the test

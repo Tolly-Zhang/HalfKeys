@@ -3,7 +3,7 @@ import os
 def manage_gitkeep(root_dir):
     for dirpath, dirnames, filenames in os.walk(root_dir):
         dirnames[:] = [d for d in dirnames if not d.startswith('.')]
-        
+
         gitkeep_path = os.path.join(dirpath, ".gitkeep")
         files_without_gitkeep = [f for f in filenames if f != '.gitkeep']
 

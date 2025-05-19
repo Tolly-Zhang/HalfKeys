@@ -6,9 +6,23 @@ import logging
 from datetime import datetime, timedelta
 from tqdm import tqdm
 import datasets
+import tempfile
+import atexit
 
 class DatasetManager:
-    METADATA_FILE = "dataset_metadata.json"
+    # Class variables
+    _verified_datasets = set()  # Track verified datasets for the session
+
+    # Update paths structure
+    DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data'))
+    METADATA_DIR = os.path.join(DATA_DIR, 'metadata')
+    RAW_DIR = os.path.join(DATA_DIR, 'raw')
+    PROCESSED_DIR = os.path.join(DATA_DIR, 'processed')
+
+    # Update metadata file paths
+    METADATA_FILE = os.path.join(METADATA_DIR, "dataset_metadata.json")
+    DATASET_INFO_FILE = os.path.join(METADATA_DIR, "dataset_info.json")
+    STATE_FILE = os.path.join(METADATA_DIR, "state.json")
 
     @staticmethod
     def initial_load(dataset_name, dataset_dir):
@@ -16,35 +30,42 @@ class DatasetManager:
         Initial load of the dataset. Downloads the dataset files to the specified directory.
         Computes and saves a reference hash for verification.
         """
-        # Ensure directory is empty
+        # Add this line at the start to see where temp files go
+        logging.info(f"Temporary directory location: {tempfile.gettempdir()}")
+
         if DatasetManager._is_directory_populated(dataset_dir):
             raise RuntimeError(f"Directory '{dataset_dir}' is not empty. Please provide an empty directory.")
 
         logging.info(f"Downloading '{dataset_name}' dataset into '{dataset_dir}'...")
         try:
-            # Use the datasets library to download the dataset
-            dataset = datasets.load_dataset(dataset_name, split='train')
-            # Save the dataset to the specified directory
-            dataset.save_to_disk(dataset_dir)
+            # Create temporary directory for dataset download
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Load the dataset using temporary directory
+                dataset = datasets.load_dataset(dataset_name, cache_dir=temp_dir)
+                # If dataset is a DatasetDict, combine all splits
+                if isinstance(dataset, datasets.DatasetDict):
+                    combined_dataset = datasets.concatenate_datasets([split for split in dataset.values()])
+                    dataset = combined_dataset
+                # Save the dataset directly to raw directory
+                dataset.save_to_disk(dataset_dir)
 
-            # Compute reference hash
-            reference_hash = DatasetManager._calculate_directory_hash(dataset_dir)
-            logging.info(f"Reference hash for '{dataset_name}': {reference_hash}")
+                # Rest of the function remains the same
+                reference_hash = DatasetManager._calculate_directory_hash(dataset_dir)
+                logging.info(f"Reference hash for '{dataset_name}': {reference_hash}")
 
-            # Save metadata
-            new_entry = {
-                "name": dataset_name,
-                "path": dataset_dir,
-                "reference_hash": reference_hash,
-                "date_loaded": datetime.now().isoformat(),
-                "date_last_verified": None
-            }
-            metadata = DatasetManager._load_metadata()
-            metadata = [entry for entry in metadata if entry["name"] != dataset_name]  # Remove old entries for the same dataset
-            metadata.append(new_entry)
-            DatasetManager._save_metadata(metadata)
+                new_entry = {
+                    "name": dataset_name,
+                    "path": dataset_dir,
+                    "reference_hash": reference_hash,
+                    "date_loaded": datetime.now().isoformat(),
+                    "date_last_verified": None
+                }
+                metadata = DatasetManager._load_metadata()
+                metadata = [entry for entry in metadata if entry["name"] != dataset_name]
+                metadata.append(new_entry)
+                DatasetManager._save_metadata(metadata)
 
-            logging.info("Dataset downloaded and metadata saved.")
+                logging.info("Dataset downloaded and metadata saved.")
         except Exception as e:
             logging.error(f"Error during dataset loading: {e}")
             raise
@@ -57,30 +78,43 @@ class DatasetManager:
         """
         if overwrite:
             logging.info(f"Overwriting existing dataset in '{dataset_dir}'...")
-            shutil.rmtree(dataset_dir)
+            if os.path.exists(dataset_dir):
+                shutil.rmtree(dataset_dir)
             os.makedirs(dataset_dir, exist_ok=True)
         elif DatasetManager._is_directory_populated(dataset_dir):
             logging.info(f"Directory '{dataset_dir}' contains files. Comparing with the reference dataset...")
 
-        # Simulate download/update logic
         logging.info(f"Reloading dataset '{dataset_name}' into '{dataset_dir}'...")
-        # Use the datasets library to reload the dataset
-        dataset = datasets.load_dataset(dataset_name, split='train')
-        dataset.save_to_disk(dataset_dir)
+        try:
+            # Create temporary directory for dataset download
+            with tempfile.TemporaryDirectory() as temp_dir:
+                dataset = datasets.load_dataset(dataset_name, cache_dir=temp_dir)
+                if isinstance(dataset, datasets.DatasetDict):
+                    combined_dataset = datasets.concatenate_datasets([split for split in dataset.values()])
+                    dataset = combined_dataset
+                dataset.save_to_disk(dataset_dir)
 
-        # Update reference hash
-        reference_hash = DatasetManager._calculate_directory_hash(dataset_dir)
-        logging.info(f"New reference hash for '{dataset_name}': {reference_hash}")
+                # Rest of the function remains the same...
+                reference_hash = DatasetManager._calculate_directory_hash(dataset_dir)
+                logging.info(f"New reference hash for '{dataset_name}': {reference_hash}")
 
-        # Update metadata
-        metadata = DatasetManager._load_metadata()
-        for entry in metadata:
-            if entry["name"] == dataset_name:
-                entry["reference_hash"] = reference_hash
-                entry["date_loaded"] = datetime.now().isoformat()
-        DatasetManager._save_metadata(metadata)
+                new_entry = {
+                    "name": dataset_name,
+                    "path": dataset_dir,
+                    "reference_hash": reference_hash,
+                    "date_loaded": datetime.now().isoformat(),
+                    "date_last_verified": None
+                }
 
-        logging.info("Dataset reloaded and metadata updated.")
+                metadata = DatasetManager._load_metadata()
+                metadata = [entry for entry in metadata if entry["name"] != dataset_name]
+                metadata.append(new_entry)
+                DatasetManager._save_metadata(metadata)
+
+                logging.info("Dataset reloaded and metadata updated.")
+        except Exception as e:
+            logging.error(f"Error during dataset reloading: {e}")
+            raise
 
     @staticmethod
     def fetch_status(dataset_name=None):
@@ -90,10 +124,10 @@ class DatasetManager:
         """
         try:
             metadata = DatasetManager._load_metadata()
-            if dataset_name:
+            if (dataset_name):
                 # Fetch status for the specified dataset
                 entry = next((e for e in metadata if e["name"] == dataset_name), None)
-                if entry:
+                if (entry):
                     logging.info(f"Dataset '{dataset_name}' status:")
                     logging.info(f"  Path: {entry['path']}")
                     logging.info(f"  Date Loaded: {entry['date_loaded']}")
@@ -102,7 +136,7 @@ class DatasetManager:
                     logging.info(f"No metadata found for dataset '{dataset_name}'.")
             else:
                 # Fetch status for all datasets
-                if metadata:
+                if (metadata):
                     logging.info("Status of all loaded datasets:")
                     for entry in metadata:
                         logging.info(f"- Dataset '{entry['name']}':")
@@ -114,43 +148,46 @@ class DatasetManager:
         except Exception as e:
             logging.error(f"An error occurred while fetching status: {e}")
 
-    @staticmethod
-    def verify_files(dataset_name):
-        """
-        Verifies the dataset files and updates the verification timestamp.
-        """
-        try:
-            metadata = DatasetManager._load_metadata()
-            entry = next((e for e in metadata if e["name"] == dataset_name), None)
+    @classmethod
+    def verify_files(cls, dataset_name: str) -> bool:
+        """Verify dataset files and update verification timestamp"""
+        # Skip if already verified this session
+        if dataset_name in cls._verified_datasets:
+            logging.info(f"Dataset {dataset_name} already verified this session.")
+            return True
 
+        try:
+            metadata = cls._load_metadata()
+            entry = next((e for e in metadata if e["name"] == dataset_name), None)
             if not entry:
-                raise RuntimeError(f"No metadata found for dataset '{dataset_name}'. Please load it first.")
+                raise RuntimeError(f"No metadata found for dataset '{dataset_name}'.")
 
             dataset_dir = entry["path"]
             reference_hash = entry["reference_hash"]
 
             if not os.path.exists(dataset_dir):
-                logging.error(f"Dataset directory '{dataset_dir}' does not exist. Verification failed.")
+                logging.error(f"Dataset directory not found: {dataset_dir}")
                 return False
 
-            # Log the initiation of dataset verification
+            # Calculate current hash
             logging.info("Dataset verification initiated.")
+            current_hash = cls._calculate_directory_hash(dataset_dir)
 
-            # Always verify the dataset files
-            current_hash = DatasetManager._calculate_directory_hash(dataset_dir)
             logging.info(f"Reference hash: {reference_hash}")
             logging.info(f"Current hash: {current_hash}")
 
-            if current_hash != reference_hash:
-                logging.warning("Hash mismatch! The dataset files have been altered.")
-                raise RuntimeError("Dataset verification failed. Please reload the dataset to proceed.")
-            else:
+            if current_hash == reference_hash:
                 logging.info("Dataset verification successful.")
                 entry["date_last_verified"] = datetime.now().isoformat()
-                DatasetManager._save_metadata(metadata)
-            return True
+                cls._save_metadata(metadata)
+                cls._verified_datasets.add(dataset_name)
+                return True
+            else:
+                logging.error("Dataset verification failed! Files may be corrupted.")
+                return False
+
         except Exception as e:
-            logging.error(f"An error occurred during verification: {e}")
+            logging.error(f"Error during verification: {e}")
             return False
 
     @staticmethod
@@ -174,27 +211,19 @@ class DatasetManager:
         DatasetManager._save_metadata(metadata)
         logging.info(f"Dataset '{dataset_name}' and its metadata have been deleted.")
 
-    @staticmethod
-    def _calculate_directory_hash(directory, hash_type="sha256"):
-        """
-        Computes a hash for the entire directory by hashing all files within it.
-        Displays a progress bar during the process.
-        """
-        hash_func = hashlib.new(hash_type)
+    @classmethod
+    def _calculate_directory_hash(cls, directory: str) -> str:
+        """Calculate hash of all files in directory"""
+        hash_func = hashlib.sha256()
         file_list = []
 
-        # Collect all file paths
-        for root, _, files in os.walk(directory):
-            for file in files:
-                filepath = os.path.join(root, file)
-                file_list.append(filepath)
+        for file in os.listdir(directory):
+            if file.endswith('.arrow'):
+                file_list.append(os.path.join(directory, file))
 
-        # Sort files to ensure consistent order
         file_list.sort()
 
-        # Log the start of hash calculation
-        logging.info("Calculating directory hash:")
-        for filepath in tqdm(file_list, desc="Verifying files", unit="file"):
+        for filepath in tqdm(file_list, desc="Verifying files"):
             with open(filepath, "rb") as f:
                 while chunk := f.read(8192):
                     hash_func.update(chunk)
@@ -206,16 +235,17 @@ class DatasetManager:
         """Check if the specified directory contains files or subdirectories."""
         return os.path.exists(directory) and any(os.scandir(directory))
 
-    @staticmethod
-    def _load_metadata():
-        """Load dataset metadata from the disk."""
-        if not os.path.exists(DatasetManager.METADATA_FILE):
+    @classmethod
+    def _load_metadata(cls) -> list:
+        """Load dataset metadata"""
+        os.makedirs(cls.METADATA_DIR, exist_ok=True)
+        if not os.path.exists(cls.METADATA_FILE):
             return []
-        with open(DatasetManager.METADATA_FILE, "r") as f:
+        with open(cls.METADATA_FILE, "r") as f:
             return json.load(f)
 
-    @staticmethod
-    def _save_metadata(metadata):
-        """Save dataset metadata to the disk."""
-        with open(DatasetManager.METADATA_FILE, "w") as f:
+    @classmethod
+    def _save_metadata(cls, metadata: list):
+        """Save dataset metadata"""
+        with open(cls.METADATA_FILE, "w") as f:
             json.dump(metadata, f, indent=4)

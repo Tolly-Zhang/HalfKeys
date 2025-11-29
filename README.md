@@ -1,2 +1,2 @@
 # HalfKeys
-A single-hand keyboard built using N-Gram
+Project is currently under development.
